@@ -8,7 +8,9 @@ import time
 import httpx
 
 from common import get_settings, ServiceResponse, ServiceNotFoundException
+from common.auth import auth_service
 from routes import v1, v2
+from routes.auth import auth_router
 
 
 settings = get_settings()
@@ -80,6 +82,12 @@ async def log_requests(request: Request, call_next):
     
     return response
 
+
+# 注册认证路由
+app.include_router(
+    auth_router,
+    tags=["Auth"],
+)
 
 # 注册版本路由
 app.include_router(
