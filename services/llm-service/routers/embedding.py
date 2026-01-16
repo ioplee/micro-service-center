@@ -4,7 +4,7 @@ from pydantic import BaseModel
 import time
 
 from common import ServiceResponse, LLMException
-from services import embedding_service
+from services import ollama_embedding_service
 
 
 router = APIRouter()
@@ -12,22 +12,23 @@ router = APIRouter()
 
 class EmbeddingRequest(BaseModel):
     input: List[str]
-    model: str = "text-embedding-3-small"
-    encoding_format: str = "float"
-    dimensions: Optional[int] = None
-    user: Optional[str] = None
+    model: str = None
 
 
-@router.post("/create", tags=["Embedding"], summary="创建文本嵌入")
+class BatchEmbeddingRequest(BaseModel):
+    input: List[str]
+    model: str = None
+    batch_size: int = 10
+
+
+@router.post("/create", tags=["Embedding"], summary="创建嵌入向量")
 async def create_embedding(request: EmbeddingRequest):
     try:
-        result = embedding_service.create_embedding(
-            input_texts=request.input,
+        result = ollama_embedding_service.create_embedding(
+            input=request.input,
             model=request.model,
-            encoding_format=request.encoding_format,
-            dimensions=request.dimensions,
-            user=request.user,
         )
+        
         return ServiceResponse(
             success=True,
             data=result,
@@ -41,27 +42,18 @@ async def create_embedding(request: EmbeddingRequest):
         )
 
 
-@router.post("/batch-create", tags=["Embedding"], summary="批量创建文本嵌入")
-async def batch_create_embedding(
-    inputs: List[List[str]] = Body(...),
-    model: str = Body("text-embedding-3-small"),
-    batch_size: int = Body(100, ge=1, le=1000),
-):
+@router.post("/create/batch", tags=["Embedding"], summary="批量创建嵌入向量")
+async def batch_create_embedding(request: BatchEmbeddingRequest):
     try:
-        all_results = []
-        for batch in [inputs[i:i+batch_size] for i in range(0, len(inputs), batch_size)]:
-            result = embedding_service.create_embedding(
-                input_texts=batch,
-                model=model,
-            )
-            all_results.extend(result.get("data", []))
+        result = ollama_embedding_service.batch_create_embedding(
+            input=request.input,
+            model=request.model,
+            batch_size=request.batch_size,
+        )
         
         return ServiceResponse(
             success=True,
-            data={
-                "data": all_results,
-                "total_count": len(all_results),
-            },
+            data=result,
             version="1.0.0",
             timestamp=time.time(),
         )
@@ -72,65 +64,17 @@ async def batch_create_embedding(
         )
 
 
-@router.post("/similarity", tags=["Embedding"], summary="计算向量相似度")
-async def calculate_similarity(
-    vectors1: List[List[float]] = Body(...),
-    vectors2: List[List[float]] = Body(...),
-    metric: str = Body("cosine"),
-):
-    try:
-        result = embedding_service.calculate_similarity(
-            vectors1=vectors1,
-            vectors2=vectors2,
-            metric=metric,
-        )
-        return ServiceResponse(
-            success=True,
-            data=result,
-            version="1.0.0",
-            timestamp=time.time(),
-        )
-    except Exception as e:
-        raise LLMException(
-            detail=f"Calculate similarity failed: {str(e)}",
-            error_code="EMBEDDING_SIMILARITY_FAILED",
-        )
-
-
-@router.post("/search", tags=["Embedding"], summary="向量搜索")
-async def semantic_search(
-    query: str = Body(...),
-    documents: List[str] = Body(...),
-    top_k: int = Body(5, ge=1, le=100),
-    model: str = Body("text-embedding-3-small"),
-):
-    try:
-        result = embedding_service.semantic_search(
-            query=query,
-            documents=documents,
-            top_k=top_k,
-            model=model,
-        )
-        return ServiceResponse(
-            success=True,
-            data=result,
-            version="1.0.0",
-            timestamp=time.time(),
-        )
-    except Exception as e:
-        raise LLMException(
-            detail=f"Semantic search failed: {str(e)}",
-            error_code="EMBEDDING_SEARCH_FAILED",
-        )
-
-
 @router.get("/models", tags=["Embedding"], summary="获取支持的嵌入模型")
 async def get_embedding_models():
     try:
-        result = embedding_service.get_available_models()
+        models = ollama_embedding_service.get_available_models()
+        
         return ServiceResponse(
             success=True,
-            data=result,
+            data={
+                "models": models,
+                "total_count": len(models),
+            },
             version="1.0.0",
             timestamp=time.time(),
         )
@@ -138,4 +82,60 @@ async def get_embedding_models():
         raise LLMException(
             detail=f"Get embedding models failed: {str(e)}",
             error_code="EMBEDDING_GET_MODELS_FAILED",
+        )
+
+
+@router.post("/similarity", tags=["Embedding"], summary="计算相似度")
+async def calculate_similarity(
+    texts: List[str] = Body(..., min_length=2),
+    model: str = None,
+):
+    try:
+        if len(texts) < 2:
+            raise ValueError("至少需要两个文本进行相似度计算")
+        
+        # 创建嵌入向量
+        result = ollama_embedding_service.create_embedding(
+            input=texts,
+            model=model,
+        )
+        
+        embeddings = [item["embedding"] for item in result["data"]]
+        
+        # 计算余弦相似度
+        similarities = []
+        
+        for i in range(len(embeddings)):
+            for j in range(i + 1, len(embeddings)):
+                dot_product = sum(
+                    a * b for a, b in zip(embeddings[i], embeddings[j])
+                )
+                norm_i = sum(a * a for a in embeddings[i]) ** 0.5
+                norm_j = sum(b * b for b in embeddings[j]) ** 0.5
+                
+                if norm_i == 0 or norm_j == 0:
+                    similarity = 0.0
+                else:
+                    similarity = dot_product / (norm_i * norm_j)
+                
+                similarities.append({
+                    "pair": [i, j],
+                    "texts": [texts[i], texts[j]],
+                    "similarity": similarity,
+                })
+        
+        return ServiceResponse(
+            success=True,
+            data={
+                "total_pairs": len(similarities),
+                "similarities": similarities,
+                "model": result["model"],
+            },
+            version="1.0.0",
+            timestamp=time.time(),
+        )
+    except Exception as e:
+        raise LLMException(
+            detail=f"Calculate similarity failed: {str(e)}",
+            error_code="EMBEDDING_SIMILARITY_FAILED",
         )

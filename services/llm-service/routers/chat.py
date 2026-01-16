@@ -4,7 +4,7 @@ from pydantic import BaseModel
 import time
 
 from common import ServiceResponse, LLMException
-from services import chat_service
+from services import vllm_service
 
 
 router = APIRouter()
@@ -19,7 +19,7 @@ class Message(BaseModel):
 class ChatCompletionRequest(BaseModel):
     model: str = "gpt-3.5-turbo"
     messages: List[Message]
-    temperature: float = 1.0
+    temperature: float = 0.7
     top_p: float = 1.0
     n: int = 1
     stream: bool = False
@@ -33,7 +33,7 @@ class ChatCompletionRequest(BaseModel):
 @router.post("/completions", tags=["Chat"], summary="创建聊天补全")
 async def create_chat_completion(request: ChatCompletionRequest):
     try:
-        result = chat_service.create_chat_completion(
+        result = vllm_service.create_chat_completion(
             model=request.model,
             messages=[m.dict() for m in request.messages],
             temperature=request.temperature,
@@ -63,14 +63,14 @@ async def create_chat_completion(request: ChatCompletionRequest):
 async def create_chat_completion_stream(
     model: str = Body("gpt-3.5-turbo"),
     messages: List[Message] = Body(...),
-    temperature: float = Body(1.0),
+    temperature: float = Body(0.7),
     top_p: float = Body(1.0),
     stop: Optional[List[str]] = Body(None),
     max_tokens: Optional[int] = Body(None),
     user: Optional[str] = Body(None),
 ):
     try:
-        result = chat_service.create_chat_completion(
+        result = vllm_service.create_chat_completion(
             model=model,
             messages=[m.dict() for m in messages],
             temperature=temperature,
@@ -97,25 +97,32 @@ async def create_chat_completion_stream(
 async def batch_chat_completion(
     conversations: List[List[Message]] = Body(...),
     model: str = Body("gpt-3.5-turbo"),
-    temperature: float = Body(1.0),
-    batch_size: int = Body(5, ge=1, le=50),
+    temperature: float = Body(0.7),
+    top_p: float = Body(1.0),
+    max_tokens: Optional[int] = Body(None),
 ):
     try:
-        all_results = []
-        for batch in [conversations[i:i+batch_size] for i in range(0, len(conversations), batch_size)]:
-            for messages in batch:
-                result = chat_service.create_chat_completion(
-                    model=model,
-                    messages=[m.dict() for m in messages],
-                    temperature=temperature,
-                )
-                all_results.append(result)
+        results = []
+        
+        for idx, conversation in enumerate(conversations):
+            result = vllm_service.create_chat_completion(
+                model=model,
+                messages=[m.dict() for m in conversation],
+                temperature=temperature,
+                top_p=top_p,
+                max_tokens=max_tokens,
+            )
+            
+            results.append({
+                "id": idx,
+                "result": result,
+            })
         
         return ServiceResponse(
             success=True,
             data={
-                "results": all_results,
-                "total_count": len(all_results),
+                "total_count": len(results),
+                "results": results,
             },
             version="1.0.0",
             timestamp=time.time(),
@@ -123,22 +130,25 @@ async def batch_chat_completion(
     except Exception as e:
         raise LLMException(
             detail=f"Batch chat completion failed: {str(e)}",
-            error_code="CHAT_COMPLETION_BATCH_FAILED",
+            error_code="BATCH_CHAT_COMPLETION_FAILED",
         )
 
 
-@router.get("/models", tags=["Chat"], summary="获取支持的聊天模型")
+@router.get("/models", tags=["Chat"], summary="获取支持的模型")
 async def get_chat_models():
     try:
-        result = chat_service.get_available_models()
+        models = vllm_service.get_available_models()
         return ServiceResponse(
             success=True,
-            data=result,
+            data={
+                "models": models,
+                "total_count": len(models),
+            },
             version="1.0.0",
             timestamp=time.time(),
         )
     except Exception as e:
         raise LLMException(
             detail=f"Get chat models failed: {str(e)}",
-            error_code="CHAT_GET_MODELS_FAILED",
+            error_code="GET_CHAT_MODELS_FAILED",
         )

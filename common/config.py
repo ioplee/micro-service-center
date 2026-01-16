@@ -61,6 +61,16 @@ class Settings(BaseSettings):
     embedding_model: str = "text-embedding-3-small"
     llm_model: str = "gpt-3.5-turbo"
     
+    # vLLM 配置
+    vllm_api_key: Optional[str] = None
+    vllm_base_url: str = "http://localhost:8000/v1"
+    vllm_model: str = "Qwen/Qwen-7B-Chat"
+    
+    # Ollama 配置
+    ollama_host: str = "localhost"
+    ollama_port: int = 11434
+    ollama_embedding_model: str = "shaw/dmeta-embedding-zh"
+    
     # 服务注册
     service_registry_url: Optional[str] = None
     
